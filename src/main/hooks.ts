@@ -267,8 +267,6 @@ export function runHook(
     // removal open. `exec` stays because it owns the per-platform shell invocation (`cmd.exe`
     // wants `/d /s /c`, not `-c`), which is not this change's to re-derive.
     let settled = false
-    // Declared before `exec` because its callback can fire synchronously (and does under test),
-    // which would otherwise hit the temporal dead zone on the timer below.
     let deadline: NodeJS.Timeout | undefined
     const settle = (result: HookProcessOutcome): void => {
       if (settled) {
@@ -303,15 +301,20 @@ export function runHook(
         )
       }
     )
-    deadline = setTimeout(() => {
-      settle(
-        classifyHookProcessResult(
-          { code: null, stdout: '', stderr: '', timedOut: true },
-          { hookName, cwd, timeoutMs }
+    // Why guarded: `exec`'s callback can fire synchronously (the unit test's mock does), and arming
+    // a deadline on an already-settled run would later signal a process group whose pid is long
+    // gone — and may by then belong to something else.
+    if (!settled) {
+      deadline = setTimeout(() => {
+        settle(
+          classifyHookProcessResult(
+            { code: null, stdout: '', stderr: '', timedOut: true },
+            { hookName, cwd, timeoutMs }
+          )
         )
-      )
-      terminateHookTree(child, 'SIGTERM')
-      setTimeout(() => terminateHookTree(child, 'SIGKILL'), SIGTERM_GRACE_MS).unref?.()
-    }, timeoutMs)
+        terminateHookTree(child, 'SIGTERM')
+        setTimeout(() => terminateHookTree(child, 'SIGKILL'), SIGTERM_GRACE_MS).unref?.()
+      }, timeoutMs)
+    }
   })
 }

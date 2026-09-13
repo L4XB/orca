@@ -22,12 +22,21 @@ export type ArchiveHooksForRemoval = {
   hookConfigUnreadable: boolean
 }
 
-export async function getArchiveHooksForRemoval(repo: Repo): Promise<ArchiveHooksForRemoval> {
-  if (!repo.connectionId) {
+/**
+ * @param connectionId Overrides `repo.connectionId`, which answers null for a row that names its
+ *   owner only as `executionHostId: 'ssh:<target>'`. Callers holding a resolved removal route must
+ *   pass it, or an SSH-hosted repo is read on the local disk and its archive hook goes unseen.
+ */
+export async function getArchiveHooksForRemoval(
+  repo: Repo,
+  connectionId?: string
+): Promise<ArchiveHooksForRemoval> {
+  const owner = connectionId ?? repo.connectionId
+  if (!owner) {
     return { hooks: getEffectiveHooks(repo), hookConfigUnreadable: false }
   }
 
-  const fsProvider = getSshFilesystemProvider(repo.connectionId)
+  const fsProvider = getSshFilesystemProvider(owner)
   if (!fsProvider) {
     // Deliberately NOT flagged unreadable: an absent provider is a pre-existing condition with its
     // own downstream handling, and failing the removal closed here would break every SSH delete

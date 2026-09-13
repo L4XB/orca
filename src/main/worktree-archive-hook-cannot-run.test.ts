@@ -30,7 +30,12 @@ describe('gateRemovalWhereArchiveHookCannotRun', () => {
   it('lets a repo with no archive hook through untouched', async () => {
     withArchiveHook(false)
     await expect(
-      gateRemovalWhereArchiveHookCannotRun({ repo: REPO, worktreePath: '/w/f', runHooks: true })
+      gateRemovalWhereArchiveHookCannotRun({
+        repo: REPO,
+        connectionId: undefined,
+        worktreePath: '/w/f',
+        runHooks: true
+      })
     ).resolves.toBeUndefined()
   })
 
@@ -38,7 +43,12 @@ describe('gateRemovalWhereArchiveHookCannotRun', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     withArchiveHook(true)
     await expect(
-      gateRemovalWhereArchiveHookCannotRun({ repo: REPO, worktreePath: '/w/f', runHooks: false })
+      gateRemovalWhereArchiveHookCannotRun({
+        repo: REPO,
+        connectionId: undefined,
+        worktreePath: '/w/f',
+        runHooks: false
+      })
     ).resolves.toContain('pass --run-hooks to run it')
   })
 
@@ -49,16 +59,21 @@ describe('gateRemovalWhereArchiveHookCannotRun', () => {
     withArchiveHook(false)
     await gateRemovalWhereArchiveHookCannotRun({
       repo: REPO,
+      connectionId: 'ssh-target',
       worktreePath: '/w/f',
       runHooks: true
     })
-    expect(getArchiveHooksForRemovalMock).toHaveBeenCalledWith(REPO)
+    // Why the connectionId matters: `repo.connectionId` is null for a row that names its owner
+    // only as `executionHostId: 'ssh:<target>'`, and reading local disk there would miss the
+    // committed hook entirely — the exact silent skip this gate exists to stop.
+    expect(getArchiveHooksForRemovalMock).toHaveBeenCalledWith(REPO, 'ssh-target')
   })
 
   it('refuses a hooks-requested removal it cannot honour, as unverifiable', async () => {
     withArchiveHook(true)
     const thrown = await gateRemovalWhereArchiveHookCannotRun({
       repo: REPO,
+      connectionId: undefined,
       worktreePath: '/w/f',
       runHooks: true
     }).catch((error: unknown) => error)

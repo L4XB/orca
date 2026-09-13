@@ -53,10 +53,12 @@ export function gateWorktreeRemovalOnArchiveHook(args: {
  */
 export async function gateRemovalWhereArchiveHookCannotRun(args: {
   repo: Repo
+  /** The removal route's owner; `repo.connectionId` is null for an `ssh:`-only row. */
+  connectionId: string | undefined
   worktreePath: string
   runHooks: boolean
 }): Promise<string | undefined> {
-  const { hooks } = await getArchiveHooksForRemoval(args.repo)
+  const { hooks } = await getArchiveHooksForRemoval(args.repo, args.connectionId)
   if (!hooks?.scripts.archive) {
     return undefined
   }

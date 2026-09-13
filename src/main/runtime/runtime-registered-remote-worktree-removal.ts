@@ -38,6 +38,7 @@ export async function removeRuntimeRegisteredRemoteWorktree(args: {
   // that asked for one refuses rather than deleting with the archive step silently skipped.
   const hookWarning = await gateRemovalWhereArchiveHookCannotRun({
     repo,
+    connectionId,
     worktreePath: registeredWorktree.path,
     runHooks: args.runHooks
   })
