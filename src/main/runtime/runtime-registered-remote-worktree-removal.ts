@@ -18,6 +18,8 @@ export async function removeRuntimeRegisteredRemoteWorktree(args: {
   connectionId: string
   /** #19334: this path runs no archive hook, so the gate below decides what that means. */
   runHooks: boolean
+  /** Explicit waiver for that refusal; without it the block has no exit on this path. */
+  allowFailedArchiveHook: boolean
   force: boolean
   allowUnverifiedPtyStop: boolean
   deleteBranch: boolean
@@ -36,11 +38,12 @@ export async function removeRuntimeRegisteredRemoteWorktree(args: {
   const { repo, target, registeredWorktree, provider, connectionId } = args
   // Precondition, before anything is stopped or deleted: no archive hook runs here, so a removal
   // that asked for one refuses rather than deleting with the archive step silently skipped.
-  const hookWarning = await gateRemovalWhereArchiveHookCannotRun({
+  const hookGate = await gateRemovalWhereArchiveHookCannotRun({
     repo,
     connectionId,
     worktreePath: registeredWorktree.path,
-    runHooks: args.runHooks
+    runHooks: args.runHooks,
+    allowFailedArchiveHook: args.allowFailedArchiveHook
   })
   const removeOptions = !args.deleteBranch ? { deleteBranch: args.deleteBranch } : {}
   const gate = await args.acquireWatcherRemoval(registeredWorktree.path, connectionId)
@@ -65,5 +68,9 @@ export async function removeRuntimeRegisteredRemoteWorktree(args: {
   )
   await args.deleteHistory()
   args.finishRemoval(result)
-  return hookWarning ? { ...result, warning: hookWarning } : result
+  return {
+    ...result,
+    ...(hookGate.override ? { archiveHookOverride: hookGate.override } : {}),
+    ...(hookGate.warning ? { warning: hookGate.warning } : {})
+  }
 }

@@ -52,4 +52,20 @@ describe('getArchiveHooksForRemoval owner resolution', () => {
     expect(getSshFilesystemProviderMock).not.toHaveBeenCalled()
     expect(getEffectiveHooksMock).toHaveBeenCalled()
   })
+
+  // Known limitation, pinned so it is a decision rather than a surprise: the relay rewrites a
+  // non-numeric error code to -32000, so a missing orca.yaml and an unreachable host arrive
+  // identically. Both answer "no hook", which lets the removal proceed. Reporting them apart needs
+  // a provider contract that returns absence as a successful outcome — tracked in #20196.
+  it('answers "no hook" when the host cannot be read, missing or unreachable alike', async () => {
+    getSshFilesystemProviderMock.mockReturnValue({
+      readFile: vi.fn().mockRejectedValue(
+        Object.assign(new Error('transport closed'), {
+          code: -32000
+        })
+      )
+    })
+
+    await expect(getArchiveHooksForRemoval(REMOTE_REPO, 'ssh-target')).resolves.toEqual(null)
+  })
 })

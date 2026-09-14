@@ -131,18 +131,7 @@ export async function executeWorktreeRemoval(
   // options, listing and dispatch from `repo.connectionId` alone. Passing a different owner to the
   // hook reader would read one host's orca.yaml while running the other host's git. The runtime's
   // SSH path is the one that carries a route owner separate from the row, and it passes it.
-  const { hooks, hookConfigUnreadable } = await getArchiveHooksForRemoval(repo)
-
-  // Why a warning and not a refusal (#19334 / S2): an unreadable orca.yaml means we cannot tell a
-  // repo with no archive hook from one whose hook we failed to see, and the SSH read crosses an RPC
-  // boundary that does not preserve ENOENT. Failing closed on that signal would refuse removal for
-  // every SSH repo that simply has no orca.yaml — a far larger regression than the gap it closes.
-  // Making this blocking needs a provider contract that reports "absent" distinctly from "failed".
-  let hookConfigWarning: string | undefined
-  if (hookConfigUnreadable && !args.skipArchive) {
-    hookConfigWarning = `Could not read orca.yaml for ${canonicalWorktreePath} on the execution host; if an archive hook is configured there, it did not run.`
-    console.warn(`[hooks] ${hookConfigWarning}`)
-  }
+  const hooks = await getArchiveHooksForRemoval(repo)
 
   const archiveScript = hooks?.scripts.archive
 
@@ -200,9 +189,5 @@ export async function executeWorktreeRemoval(
         hasLocalWorktreeGitOptions,
         deleteBranch
       )
-  return {
-    ...result,
-    ...(archiveHookOverride ? { archiveHookOverride } : {}),
-    ...(hookConfigWarning ? { warning: hookConfigWarning } : {})
-  }
+  return archiveHookOverride ? { ...result, archiveHookOverride } : result
 }

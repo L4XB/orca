@@ -201,6 +201,7 @@ export class OrcaRuntimeWithRemoveManagedWorktree extends OrcaRuntimeWithCreateM
         if (route.kind === 'ssh') {
           return removeRuntimeRegisteredRemoteWorktree({
             runHooks,
+            allowFailedArchiveHook,
             repo,
             target: removalTarget,
             registeredWorktree,

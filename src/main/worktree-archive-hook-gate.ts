@@ -2,6 +2,8 @@ import type { Repo } from '../shared/repo-types'
 import { getArchiveHooksForRemoval } from './ipc/worktrees/removal/worktree-archive-hook'
 import {
   WorktreeArchiveHookFailedError,
+  formatArchiveHookOverride,
+  type ArchiveHookFailure,
   classifyArchiveHookFailure,
   formatArchiveHookFailure,
   type ArchiveHookOverride,
@@ -43,7 +45,8 @@ export function gateWorktreeRemovalOnArchiveHook(args: {
  *
  * Modelled as `unverifiable` because that is what it is — the hook's outcome was never observed —
  * so it reuses the same typed error, the same `--allow-failed-archive-hook` waiver, and the same
- * desktop "Delete Anyway" affordance as any other unobserved hook.
+ * desktop "Delete Anyway" affordance as any other unobserved hook. Waiving it records the same
+ * `archiveHookOverride` the other paths return, so a caller is told what it accepted.
  *
  * Returns the skipped-hook warning when hooks were not requested, matching the local path.
  *
@@ -57,20 +60,27 @@ export async function gateRemovalWhereArchiveHookCannotRun(args: {
   connectionId: string | undefined
   worktreePath: string
   runHooks: boolean
-}): Promise<string | undefined> {
-  const { hooks } = await getArchiveHooksForRemoval(args.repo, args.connectionId)
+  /** Explicit waiver. Without it the refusal below has no exit on this path. */
+  allowFailedArchiveHook: boolean
+}): Promise<{ warning?: string; override?: ArchiveHookOverride }> {
+  const hooks = await getArchiveHooksForRemoval(args.repo, args.connectionId)
   if (!hooks?.scripts.archive) {
-    return undefined
+    return {}
   }
   if (!args.runHooks) {
     const warning = `orca.yaml archive hook skipped for ${args.worktreePath}; pass --run-hooks to run it.`
     console.warn(`[hooks] ${warning}`)
-    return warning
+    return { warning }
   }
-  throw new WorktreeArchiveHookFailedError({
+  const failure: ArchiveHookFailure = {
     worktreePath: args.worktreePath,
     outcome: 'unverifiable',
     output:
-      'This host cannot run an archive hook for an SSH-hosted worktree, so the hook never ran. Remove it from the desktop app, which does run it, or retry without --run-hooks to delete without archiving.'
-  })
+      'This host cannot run an archive hook for an SSH-hosted worktree, so the hook never ran. Remove it from the desktop app, which does run it, or delete anyway to accept that nothing was archived.'
+  }
+  if (!args.allowFailedArchiveHook) {
+    throw new WorktreeArchiveHookFailedError(failure)
+  }
+  console.warn(`[hooks] ${formatArchiveHookOverride({ ...failure, overridden: true })}`)
+  return { override: { ...failure, overridden: true } }
 }
