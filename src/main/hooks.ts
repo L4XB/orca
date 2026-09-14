@@ -54,10 +54,21 @@ function classifyHookProcessResult(
 const SIGTERM_GRACE_MS = 2_000
 
 /** Signal the hook's whole process group where the platform has one, else just the child. */
-function terminateHookTree(
-  child: { pid?: number; kill: (signal: NodeJS.Signals) => boolean },
-  signal: NodeJS.Signals
-): void {
+type TerminableChild = {
+  pid?: number
+  exitCode: number | null
+  signalCode: NodeJS.Signals | null
+  kill: (signal: NodeJS.Signals) => boolean
+}
+
+function terminateHookTree(child: TerminableChild, signal: NodeJS.Signals): void {
+  // Why the liveness check: this signals a process GROUP by negative pid, and the escalation below
+  // fires seconds after the child was asked to stop. If it exited in the meantime and the OS
+  // recycled its pid, `process.kill(-pid)` would reach whatever now owns that group. An exited
+  // child needs no signal, so refusing to send one closes that window entirely.
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return
+  }
   if (process.platform !== 'win32' && child.pid) {
     try {
       process.kill(-child.pid, signal)

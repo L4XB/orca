@@ -126,6 +126,11 @@ export async function executeWorktreeRemoval(
     return removalResult ?? {}
   }
 
+  // No connectionId override here, deliberately: this path derives its host from the repo row
+  // (`getRepoExecutionHostId` in register-worktree-removal-handlers) and resolves its provider, git
+  // options, listing and dispatch from `repo.connectionId` alone. Passing a different owner to the
+  // hook reader would read one host's orca.yaml while running the other host's git. The runtime's
+  // SSH path is the one that carries a route owner separate from the row, and it passes it.
   const { hooks, hookConfigUnreadable } = await getArchiveHooksForRemoval(repo)
 
   // Why a warning and not a refusal (#19334 / S2): an unreadable orca.yaml means we cannot tell a
