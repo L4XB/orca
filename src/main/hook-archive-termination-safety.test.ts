@@ -10,31 +10,94 @@ vi.mock('./effective-hook-config', () => ({
 
 const REPO: Repo = { id: 'r', path: '/repo', displayName: 'r', badgeColor: '#000', addedAt: 0 }
 
-// Why its own file: hooks that outlive their deadline in a sibling test leave a pending SIGKILL
-// escalation, and this test measures exactly that traffic. Isolation is the assertion's premise.
-//
-// Why (#19334): the escalation fires seconds after SIGTERM. `terminateHookTree` signals a process
-// GROUP by negative pid, so if the hook exited in that window and the OS recycled its pid, the
-// SIGKILL would land on whatever now owns that group. An exited child is never signalled.
-describe.skipIf(process.platform === 'win32')('archive hook termination safety', () => {
-  it('does not signal a hook that stopped on its own after the deadline', async () => {
-    const { runHook } = await import('./hooks')
-    const dir = mkdtempSync(join(tmpdir(), 'orca-hook-exit-'))
-    writeFileSync(join(dir, 'orca.yaml'), 'scripts:\n  archive: |\n    sleep 0.4\n')
-    const killSpy = vi.spyOn(process, 'kill')
-    try {
-      // The deadline lands first; the hook then finishes on its own, well before the escalation.
-      const result = await runHook('archive', dir, REPO, dir, undefined, 100)
-      expect(result.success).toBe(false)
-      await new Promise((resolve) => setTimeout(resolve, 2_600))
-
-      const groupKills = killSpy.mock.calls.filter(
-        ([pid, signal]) => typeof pid === 'number' && pid < 0 && signal === 'SIGKILL'
-      )
-      expect(groupKills).toEqual([])
-    } finally {
-      killSpy.mockRestore()
-      rmSync(dir, { recursive: true, force: true })
+/**
+ * Run a hook past its deadline with `process.kill` intercepted, so the escalation's decisions are
+ * observed directly instead of raced against the kernel. `groupAlive` answers the signal-0 probe.
+ */
+async function signalsFromTimedOutHook(groupAlive: boolean): Promise<string[]> {
+  const { runHook } = await import('./hooks')
+  const dir = mkdtempSync(join(tmpdir(), 'orca-hook-signals-'))
+  writeFileSync(join(dir, 'orca.yaml'), 'scripts:\n  archive: |\n    sleep 30\n')
+  const sent: string[] = []
+  const fakeKill = (pid: number, signal?: string | number): true => {
+    if (signal === 0) {
+      if (!groupAlive) {
+        throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' })
+      }
+      return true
     }
+    sent.push(`${pid < 0 ? 'group' : 'child'}:${String(signal)}`)
+    return true
+  }
+  const spy = vi.spyOn(process, 'kill').mockImplementation(fakeKill)
+  try {
+    await runHook('archive', dir, REPO, dir, undefined, 100)
+    await new Promise((resolve) => setTimeout(resolve, 2_400))
+    return sent
+  } finally {
+    spy.mockRestore()
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// Why (#19334): the escalation exists for descendants that outlive the shell — a setup hook that
+// backgrounds a server typically loses its leader to the first SIGTERM while the server keeps
+// running. Keying the skip on the CHILD's exit would miss exactly that case; the probe asks the
+// GROUP instead. The residual hazard, stated in hooks.ts: a recycled pid answers the probe too.
+describe.skipIf(process.platform === 'win32')('archive hook termination', () => {
+  it('escalates to the group when members survive the first signal', async () => {
+    await expect(signalsFromTimedOutHook(true)).resolves.toEqual(['group:SIGTERM', 'group:SIGKILL'])
   }, 20_000)
+
+  it('sends nothing once the group is provably empty', async () => {
+    // A group that answers ESRCH has no members left to kill, and its pid may since belong to
+    // someone else — so neither the SIGTERM nor the escalation is delivered.
+    await expect(signalsFromTimedOutHook(false)).resolves.toEqual([])
+  }, 20_000)
+})
+
+// The regression the group probe exists for, pinned directly because it cannot be reproduced
+// through `runHook` with signals intercepted: with `process.kill` mocked nothing actually dies, so
+// the child never reaches the exited state that a child-liveness skip would key on.
+describe.skipIf(process.platform === 'win32')('terminateHookTree', () => {
+  const fakeChild = (exited: boolean) => ({
+    pid: 4242,
+    exitCode: exited ? 0 : null,
+    signalCode: null,
+    kill: vi.fn()
+  })
+
+  it('signals a surviving group even though the shell leader already exited', async () => {
+    const { terminateHookTree } = await import('./hooks')
+    const sent: (string | number | undefined)[][] = []
+    const recordKill = (pid: number, signal?: string | number): true => {
+      if (signal !== 0) {
+        sent.push([pid, signal])
+      }
+      return true
+    }
+    const spy = vi.spyOn(process, 'kill').mockImplementation(recordKill)
+    try {
+      // A hook that backgrounds a server loses its leader to the first SIGTERM; the server lives on.
+      terminateHookTree(fakeChild(true), 'SIGKILL')
+      expect(sent).toEqual([[-4242, 'SIGKILL']])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('sends nothing when the group answers ESRCH', async () => {
+    const { terminateHookTree } = await import('./hooks')
+    const child = fakeChild(true)
+    const emptyGroup = (): true => {
+      throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' })
+    }
+    const spy = vi.spyOn(process, 'kill').mockImplementation(emptyGroup)
+    try {
+      terminateHookTree(child, 'SIGKILL')
+      expect(child.kill).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
 })

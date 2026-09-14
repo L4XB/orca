@@ -54,28 +54,40 @@ function classifyHookProcessResult(
 const SIGTERM_GRACE_MS = 2_000
 
 /** Signal the hook's whole process group where the platform has one, else just the child. */
-type TerminableChild = {
+export type TerminableChild = {
   pid?: number
   exitCode: number | null
   signalCode: NodeJS.Signals | null
   kill: (signal: NodeJS.Signals) => boolean
 }
 
-function terminateHookTree(child: TerminableChild, signal: NodeJS.Signals): void {
-  // Why the liveness check: this signals a process GROUP by negative pid, and the escalation below
-  // fires seconds after the child was asked to stop. If it exited in the meantime and the OS
-  // recycled its pid, `process.kill(-pid)` would reach whatever now owns that group. An exited
-  // child needs no signal, so refusing to send one closes that window entirely.
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return
-  }
+export function terminateHookTree(child: TerminableChild, signal: NodeJS.Signals): void {
+  // Why probe the GROUP and not the child: the escalation exists for descendants that outlive the
+  // shell. A hook that backgrounds a server typically loses its leader to the first SIGTERM while
+  // the server keeps running, so keying this on `child.exitCode` would skip the SIGKILL in exactly
+  // the case it was added for.
+  //
+  // The trade-off it does not solve: signalling by negative pid names whatever group owns that pid
+  // now. Once the leader is reaped its pid can be recycled, and a probe cannot tell a surviving
+  // descendant from a stranger that inherited the number. Killing a runaway hook is the likelier
+  // event and the one the deadline promises, so the group is signalled whenever it answers; the
+  // residual window is pid wraparound inside the two-second grace.
   if (process.platform !== 'win32' && child.pid) {
+    try {
+      // Signal 0 tests for members without delivering anything: ESRCH means the group is empty.
+      process.kill(-child.pid, 0)
+    } catch {
+      return
+    }
     try {
       process.kill(-child.pid, signal)
       return
     } catch {
-      // Group already gone, or we never led it; fall through to the direct kill.
+      // Raced with the last member exiting; fall through to the direct kill.
     }
+  }
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return
   }
   try {
     child.kill(signal)
