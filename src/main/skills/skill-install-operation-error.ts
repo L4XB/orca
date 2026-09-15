@@ -52,3 +52,22 @@ export function skillInstallFailureFromError(error: unknown): SkillInstallFailur
   }
   return null
 }
+
+/**
+ * Why: a download grant is the first cloud request of an install, and it throws.
+ * Neither `withoutAuth` nor `runSkillCloudOperation` turns a failed request into an
+ * operation result, and the grant is created before the install path's own
+ * try/catch, so a 503 while authorizing reached the renderer unclassified while the
+ * same 503 one step later was transport and retryable.
+ */
+export async function authorizeSkillDownload<T>(create: () => Promise<T>): Promise<T> {
+  try {
+    return await create()
+  } catch (error) {
+    const failure = skillInstallFailureFromError(error)
+    if (!failure) {
+      throw error
+    }
+    throw new SkillInstallOperationError(failure, { cause: error })
+  }
+}
