@@ -4,6 +4,7 @@ import {
   classifySkillInstallFailureCode,
   type SkillInstallFailure
 } from '../../shared/skill-install-failure'
+import { SkillCloudRequestError } from './skill-cloud-request'
 
 export class SkillInstallOperationError extends Error {
   readonly code = SKILL_INSTALL_RPC_ERROR_CODE
@@ -24,6 +25,15 @@ export function skillInstallFailureFromError(error: unknown): SkillInstallFailur
     const parsed = SkillInstallFailureSchema.safeParse((error as { data: unknown }).data)
     if (parsed.success) {
       return parsed.data
+    }
+  }
+  // Why: its `code` is the server's error code, not a Node errno, so the errno branch below
+  // would report every cloud failure as a filesystem one.
+  if (error instanceof SkillCloudRequestError) {
+    return {
+      category: 'transport',
+      code: 'skill-cloud-request-failed',
+      retryable: error.statusCode >= 500 || error.statusCode === 429
     }
   }
   if (error instanceof Error) {
